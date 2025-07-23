@@ -76,6 +76,11 @@ pub struct SMTPConnection<T> {
     /// 
     /// This field represents the traced commands.
     pub tracing_commands: Vec<Commands>,
+
+    /// # Peer Address
+    /// 
+    /// This field represents the peer address of the connection.
+    pub peer_addr: SocketAddr,
 }
 
 impl<T> SMTPConnection<T> {

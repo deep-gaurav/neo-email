@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use tokio::{sync::Mutex, time::timeout};
 use tokio_native_tls::TlsAcceptor;
@@ -9,7 +9,7 @@ use crate::{
     connection::{upgrade_to_tls, SMTPConnection, SMTPConnectionStatus},
     mail::Mail,
     message::Message,
-    server::Controllers,
+    server::{Config, Controllers},
     status_code::StatusCodes,
 };
 
@@ -17,14 +17,10 @@ use crate::{
 ///
 /// This function is responsible for handling the connection with the client, including the TLS handshake, and the SMTP commands, also dispatching the controllers configuring a timeout for session and operation.
 pub async fn handle_connection_with_timeout<B>(
-    use_tls: bool,
     tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
-    max_size: usize,
-    allowed_commands: Vec<Commands>,
-    max_session_duration: Duration,
-    max_op_duration: Duration,
+    config: &Config<B>,
 ) where
     B: 'static + Default + Send + Sync + Clone,
 {
@@ -37,15 +33,12 @@ pub async fn handle_connection_with_timeout<B>(
     let mutex_conn_for_handle_connection = mutex_con.clone();
     // Start the main loop for handling the connection with a max session duration
     match timeout(
-        max_session_duration,
+        config.max_session_duration,
         handle_connection(
-            use_tls,
             tls_acceptor,
             mutex_conn_for_handle_connection,
             controllers,
-            max_size,
-            allowed_commands,
-            max_op_duration,
+            config,
         ),
     )
     .await
@@ -73,17 +66,17 @@ pub async fn handle_connection_with_timeout<B>(
 ///
 /// This function is responsible for handling the connection with the client, including the TLS handshake, and the SMTP commands, also dispatching the controllers.
 pub async fn handle_connection<B>(
-    use_tls: bool,
     tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
-    max_size: usize,
-    allowed_commands: Vec<Commands>,
-    max_op_duration: Duration,
+    config: &Config<B>,
 ) where
     B: 'static + Default + Send + Sync + Clone,
 {
-    log::trace!("[📜] Handling connection with optional TLS?: {}", use_tls);
+    log::trace!(
+        "[📜] Handling connection with optional TLS?: {}",
+        config.use_tls
+    );
     // Send the initial message to the client
     let conn = mutex_con.lock().await;
     // Send the initial message to the client that lets the client know that the server is ready
@@ -109,14 +102,12 @@ pub async fn handle_connection<B>(
 
     loop {
         match timeout(
-            max_op_duration,
+            config.max_op_duration,
             handle_connection_logic(
-                use_tls,
                 tls_acceptor.clone(),
                 mutex_con.clone(),
                 controllers.clone(),
-                max_size,
-                allowed_commands.clone(),
+                config,
             ),
         )
         .await
@@ -161,29 +152,27 @@ pub async fn handle_connection<B>(
 }
 
 /// # HandleConnectionFlow
-/// 
+///
 /// This enum represents the possible flows that can occur while handling the connection.
 pub enum HandleConnectionFlow {
     /// # Continue
-    /// 
+    ///
     /// Continue receiving commands/data from the client.
     Continue,
     /// # Break
-    /// 
+    ///
     /// Stop receiving commands/data and close the connection peacefully.
     Break,
 }
 
 /// # handle_connection_logic
-/// 
+///
 /// This function is responsible for handling the connection logic, including the TLS handshake, and the SMTP commands, also dispatching the controllers.
 pub async fn handle_connection_logic<B>(
-    use_tls: bool,
     tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
-    max_size: usize,
-    allowed_commands: Vec<Commands>,
+    config: &Config<B>,
 ) -> HandleConnectionFlow
 where
     B: 'static + Default + Send + Sync + Clone,
@@ -228,7 +217,9 @@ where
         return HandleConnectionFlow::Continue;
     }
 
-    if conn.status == SMTPConnectionStatus::WaitingData && conn.mail_buffer.len() + n > max_size {
+    if conn.status == SMTPConnectionStatus::WaitingData
+        && conn.mail_buffer.len() + n > config.max_size
+    {
         let _ = conn
             .write_socket(
                 &Message::builder()
@@ -368,10 +359,8 @@ where
         drop(conn);
         let (mut response, status) = match handle_command(
             mutex_con.clone(),
-            controllers.clone(),
             &mut client_message,
-            allowed_commands.clone(),
-            max_size,
+            &config,
         )
         .await
         {
@@ -419,7 +408,7 @@ where
             }
             conn.buffer.clear();
             return HandleConnectionFlow::Break;
-        } else if conn.status == SMTPConnectionStatus::StartTLS && use_tls && tls_acceptor.is_some()
+        } else if conn.status == SMTPConnectionStatus::StartTLS && config.use_tls && tls_acceptor.is_some()
         {
             // let know the client that we are ready to start TLS
             match conn
@@ -472,7 +461,7 @@ where
                     conn.status = SMTPConnectionStatus::WaitingCommand;
                 }
             };
-        } else if conn.status == SMTPConnectionStatus::StartTLS && !use_tls {
+        } else if conn.status == SMTPConnectionStatus::StartTLS && !config.use_tls {
             log::trace!("[🌐🔒🚫] TLS not available");
 
             let _ = conn

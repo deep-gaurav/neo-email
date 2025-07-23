@@ -1,9 +1,10 @@
 use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
+use serde::{Deserialize, Serialize};
 use tokio::io::BufStream;
 use tokio::sync::Mutex;
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
 use crate::controllers::on_auth::OnAuthController;
 use crate::controllers::on_conn::OnConnController;
@@ -35,7 +36,7 @@ use super::controllers::on_reset::OnResetController;
 ///     pub sender: Option<String>,
 ///     pub recipients: Vec<String>,
 /// }
-/// 
+///
 /// #[tokio::main]
 /// async fn main() {
 /// let addr = SocketAddr::from(([127, 0, 0, 1], 2526));
@@ -64,19 +65,14 @@ use super::controllers::on_reset::OnResetController;
 ///        .await;
 /// }
 /// ```
-pub struct SMTPServer<B> {
-    /// # use_tls
-    ///
-    /// This field is responsible for holding the information if the server can use TLS.
-    use_tls: bool,
+pub struct SMTPServer<B> 
+where
+    B: Default + Send + Sync + Clone,{
     /// # listener
     ///
     /// This field is responsible for holding the listener that will be used by the server.
     listener: Option<Arc<tokio::net::TcpListener>>,
-    /// # workers
-    ///
-    /// This field is responsible for holding the number of workers that will be used in the ThreadPool.
-    workers: usize,
+
     /// # threads_pool
     ///
     /// This field is responsible for holding the ThreadPool that will be used by the server.
@@ -85,20 +81,86 @@ pub struct SMTPServer<B> {
     ///
     /// This field is responsible for holding the TLS Acceptor that will be used by the server.
     tls_acceptor: Option<Arc<Mutex<tokio_native_tls::TlsAcceptor>>>,
+
+    dns_resolver: Arc<Mutex<TokioAsyncResolver>>,
+
+    config: Config<B>,
+}
+
+/// # Config
+///
+/// This struct is responsible for holding the configuration of the SMTPServer.
+#[derive(Debug, Clone)]
+pub struct Config<B>
+where
+    B: Default + Send + Sync + Clone,{
+    /// # domain
+    ///
+    /// The domain of the SMTP server.
+    pub domain: Option<String>,
+    /// # use_tls
+    ///
+    /// Whether the SMTP server will use TLS or not.
+    pub use_tls: bool,
+    /// # workers
+    ///
+    /// The number of workers that will be used by the ThreadPool.
+    pub workers: usize,
+    /// # max_size
+    ///
+    /// The maximum size of the email that can be received.
+    pub max_size: usize,
+    /// # allowed_commands
+    ///
+    /// The allowed commands that the server will accept.
+    pub allowed_commands: Vec<Commands>,
+    /// # max_session_duration
+    ///
+    /// The maximum duration of a session.
+    pub max_session_duration: Duration,
+    /// # max_op_duration
+    ///
+    /// The maximum duration of an operation.
+    pub max_op_duration: Duration,
+
     /// # controllers
     ///
     /// This field is responsible for holding the controllers that will be used by the server.
-    controllers: Controllers<B>,
-    /// # max_size
+    pub controllers: Controllers<B>,
+
+    /// # auth_mechanisms
+    /// 
+    /// This field is responsible for holding the authentication mechanisms that the SMTP server supports.
+    pub auth_mechanisms: Vec<AuthMechanism>,
+}
+
+/// # Auth Mechanism
+/// 
+/// This enum represents the authentication mechanisms that the SMTP server supports.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AuthMechanism {
+    /// # Plain
     ///
-    /// This field is responsible for holding the max size of the email that can be received.
-    max_size: usize,
+    /// The PLAIN authentication mechanism.
+    Plain,
+    /// # Login
+    ///
+    /// The LOGIN authentication mechanism.
+    Login,
+    /// # CRAM-MD5
+    ///
+    /// The CRAM-MD5 authentication mechanism.
+    CramMD5,
 
-    allowed_commands: Vec<Commands>,
+    /// # OAuth2
+    ///
+    /// The OAuth2 authentication mechanism.
+    OAuth2,
 
-    max_session_duration: Duration,
-    max_op_duration: Duration,
-    dns_resolver: Arc<Mutex<TokioAsyncResolver>>,
+    /// # Unknown
+    ///
+    /// An unknown authentication mechanism.
+    Unknown(String),
 }
 
 /// # Controllers
@@ -145,7 +207,9 @@ where
     }
 }
 
-impl<B> SMTPServer<B> {
+impl<B> SMTPServer<B> 
+where
+    B: Default + Send + Sync + Clone,{
     /// # new
     ///
     /// Create a new SMTPServer with default values.
@@ -155,40 +219,44 @@ impl<B> SMTPServer<B> {
         let dns_resolver = Arc::new(Mutex::new(dns_resolver));
 
         SMTPServer {
-            use_tls: false,
             listener: None,
-            workers: 1,
             threads_pool: None,
             tls_acceptor: None,
-            controllers: Controllers {
-                on_conn: None,
-                on_auth: None,
-                on_email: None,
-                on_reset: None,
-                on_close: None,
-                on_mail_cmd: None,
-                on_rcpt_cmd: None,
-                on_unknown_cmd: None,
-            },
-            max_size: 1024 * 1024 * 10, // 10MB
-            allowed_commands: vec![
-                Commands::HELO,
-                Commands::EHLO,
-                Commands::MAIL,
-                Commands::RCPT,
-                Commands::DATA,
-                Commands::RSET,
-                Commands::VRFY,
-                Commands::EXPN,
-                Commands::HELP,
-                Commands::NOOP,
-                Commands::QUIT,
-                Commands::AUTH,
-                Commands::STARTTLS,
-            ],
-            max_session_duration: Duration::from_secs(300),
-            max_op_duration: Duration::from_secs(30),
             dns_resolver,
+            config: Config {
+                domain: None,
+                use_tls: false,
+                workers: 1,
+                max_size: 1024 * 1024 * 10, // 10 MB
+                allowed_commands: vec![
+                    Commands::HELO,
+                    Commands::EHLO,
+                    Commands::MAIL,
+                    Commands::RCPT,
+                    Commands::DATA,
+                    Commands::RSET,
+                    Commands::VRFY,
+                    Commands::EXPN,
+                    Commands::HELP,
+                    Commands::NOOP,
+                    Commands::QUIT,
+                    Commands::AUTH,
+                    Commands::STARTTLS,
+                ],
+                auth_mechanisms: vec![],
+                max_session_duration: Duration::from_secs(15),
+                max_op_duration: Duration::from_secs(5),
+                controllers: Controllers {
+                    on_conn: None,
+                    on_auth: None,
+                    on_email: None,
+                    on_reset: None,
+                    on_close: None,
+                    on_mail_cmd: None,
+                    on_rcpt_cmd: None,
+                    on_unknown_cmd: None,
+                },
+            },
         }
     }
 
@@ -197,7 +265,7 @@ impl<B> SMTPServer<B> {
     /// Set the number of workers to be used in the ThreadPool, 1 by default.
     pub fn workers(&mut self, workers: usize) -> &mut Self {
         log::info!("[🚧] Setting workers to {}", workers);
-        self.workers = workers;
+        self.config.workers = workers;
         self
     }
 
@@ -206,7 +274,7 @@ impl<B> SMTPServer<B> {
     /// Set the TLS Acceptor to be used when upgrading the connection to TLS.
     pub fn set_tls_acceptor(&mut self, acceptor: tokio_native_tls::TlsAcceptor) -> &mut Self {
         log::debug!("[📃] TLS Acceptor set");
-        self.use_tls = true;
+        self.config.use_tls = true;
         self.tls_acceptor = Some(Arc::new(Mutex::new(acceptor)));
         self
     }
@@ -227,7 +295,7 @@ impl<B> SMTPServer<B> {
     /// size in bytes
     pub fn set_max_size(&mut self, max_size: usize) -> &mut Self {
         log::debug!("[📃] Setting max size to {}", max_size);
-        self.max_size = max_size;
+        self.config.max_size = max_size;
         self
     }
 
@@ -236,16 +304,16 @@ impl<B> SMTPServer<B> {
     /// Set the allowed commands that the server will accept.
     pub fn set_allowed_commands(&mut self, commands: Vec<Commands>) -> &mut Self {
         log::debug!("[📃] Setting allowed commands");
-        self.allowed_commands = commands;
+        self.config.allowed_commands = commands;
         self
     }
 
     /// # on_conn
-    /// 
+    ///
     /// Set the OnConnController to be used when a connection is opened.
     pub fn on_conn(&mut self, on_conn: OnConnController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnConnController");
-        self.controllers.on_conn = Some(on_conn);
+        self.config.controllers.on_conn = Some(on_conn);
         self
     }
 
@@ -254,7 +322,7 @@ impl<B> SMTPServer<B> {
     /// Set the OnAuthController to be used when an auth command is received.
     pub fn on_auth(&mut self, on_auth: OnAuthController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnAuthController");
-        self.controllers.on_auth = Some(on_auth);
+        self.config.controllers.on_auth = Some(on_auth);
         self
     }
 
@@ -263,7 +331,7 @@ impl<B> SMTPServer<B> {
     /// Set the OnEmailController to be used when a email is received.
     pub fn on_email(&mut self, on_email: OnEmailController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnEmailController");
-        self.controllers.on_email = Some(on_email);
+        self.config.controllers.on_email = Some(on_email);
         self
     }
 
@@ -272,7 +340,7 @@ impl<B> SMTPServer<B> {
     /// Set the OnResetController to be used when a connection is reset.
     pub fn on_reset(&mut self, on_reset: OnResetController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnResetController");
-        self.controllers.on_reset = Some(on_reset);
+        self.config.controllers.on_reset = Some(on_reset);
         self
     }
 
@@ -281,7 +349,7 @@ impl<B> SMTPServer<B> {
     /// Set the OnCloseController to be used when a connection will be closed.
     pub fn on_close(&mut self, on_close: OnCloseController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnCloseController");
-        self.controllers.on_close = Some(on_close);
+        self.config.controllers.on_close = Some(on_close);
         self
     }
 
@@ -290,7 +358,7 @@ impl<B> SMTPServer<B> {
     /// Set the OnMailCommandController to be used when a mail command is received usually indicating the MAIL FROM.
     pub fn on_mail_cmd(&mut self, on_mail_cmd: OnMailCommandController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnMailCommandController");
-        self.controllers.on_mail_cmd = Some(on_mail_cmd);
+        self.config.controllers.on_mail_cmd = Some(on_mail_cmd);
         self
     }
 
@@ -299,16 +367,16 @@ impl<B> SMTPServer<B> {
     /// Set the OnRCPTCommandController to be used when a rcpt command is received.
     pub fn on_rcpt_cmd(&mut self, on_rcpt_cmd: OnRCPTCommandController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnRCPTCommandController");
-        self.controllers.on_rcpt_cmd = Some(on_rcpt_cmd);
+        self.config.controllers.on_rcpt_cmd = Some(on_rcpt_cmd);
         self
     }
 
     /// # on_unknown_cmd
-    /// 
+    ///
     /// Set the OnUnknownCommandController to be used when an unknown command is received.
     pub fn on_unknown_cmd(&mut self, on_unknown_cmd: OnUnknownCommandController<B>) -> &mut Self {
         log::debug!("[📃] Setting OnUnknownCommandController");
-        self.controllers.on_unknown_cmd = Some(on_unknown_cmd);
+        self.config.controllers.on_unknown_cmd = Some(on_unknown_cmd);
         self
     }
 
@@ -317,7 +385,7 @@ impl<B> SMTPServer<B> {
     /// Set the max session duration.
     pub fn set_max_session_duration(&mut self, duration: Duration) -> &mut Self {
         log::debug!("[📃] Setting max session duration to {:?}", duration);
-        self.max_session_duration = duration;
+        self.config.max_session_duration = duration;
         self
     }
 
@@ -326,7 +394,7 @@ impl<B> SMTPServer<B> {
     /// Set the max operation duration.
     pub fn set_max_op_duration(&mut self, duration: Duration) -> &mut Self {
         log::debug!("[📃] Setting max operation duration to {:?}", duration);
-        self.max_op_duration = duration;
+        self.config.max_op_duration = duration;
         self
     }
 
@@ -338,6 +406,15 @@ impl<B> SMTPServer<B> {
         let listener = tokio::net::TcpListener::bind(address).await?;
         self.listener = Some(Arc::new(listener));
         Ok(self)
+    }
+
+    /// # set_auth_mechanisms
+    /// 
+    /// Set the authentication mechanisms that the SMTP server supports.
+    pub fn set_auth_mechanisms(&mut self, mechanisms: Vec<AuthMechanism>) -> &mut Self {
+        log::debug!("[📃] Setting authentication mechanisms");
+        self.config.auth_mechanisms = mechanisms;
+        self
     }
 
     /// # run
@@ -354,9 +431,12 @@ impl<B> SMTPServer<B> {
         };
 
         // Build the ThreadPool with the number of workers, 1 by default
-        log::info!("[🚧] Building ThreadPool with {} workers", self.workers);
+        log::info!(
+            "[🚧] Building ThreadPool with {} workers",
+            self.config.workers
+        );
         self.threads_pool = match rayon::ThreadPoolBuilder::new()
-            .num_threads(self.workers)
+            .num_threads(self.config.workers)
             .build()
         {
             Ok(pool) => Some(Arc::new(pool)),
@@ -378,21 +458,25 @@ impl<B> SMTPServer<B> {
                 }
             };
 
+            let peer_addr = match socket.peer_addr() {
+                Ok(addr) => addr,
+                Err(err) => {
+                    log::error!("Failed to get peer address: {}", err);
+                    continue;
+                }
+            };
+
             log::trace!(
                 "[🔍] Connection received from {}",
-                socket.peer_addr().unwrap()
+                peer_addr.ip()
             );
 
             // Clone the thread pool, use_tls, tls_acceptor and controllers to be used in the tokio::spawn
             let pool = self.threads_pool.clone();
-            let use_tls = self.use_tls;
             let tls_acceptor = self.tls_acceptor.clone();
-            let controllers = self.controllers.clone();
-            let max_size = self.max_size;
-            let allowed_commands = self.allowed_commands.clone();
-            let max_session_duration = self.max_session_duration;
-            let max_op_duration = self.max_op_duration;
+            let controllers = self.config.controllers.clone();
             let dns_resolver = self.dns_resolver.clone();
+            let config = self.config.clone();
 
             // Spawn a new task to handle the connection
             tokio::spawn(async move {
@@ -400,6 +484,7 @@ impl<B> SMTPServer<B> {
 
                 // Create a new SMTPConnection and wrap it in an Arc<Mutex> to be shared safely between threads
                 let conn = Arc::new(Mutex::new(SMTPConnection {
+                    peer_addr,
                     use_tls: false,
                     tls_buff_socket: None,
                     tcp_buff_socket: Some(Arc::new(Mutex::new(BufStream::new(socket)))),
@@ -415,14 +500,10 @@ impl<B> SMTPServer<B> {
                     pool.install(|| {
                         tokio::runtime::Runtime::new().unwrap().block_on(
                             handle_connection_with_timeout(
-                                use_tls,
                                 tls_acceptor,
                                 conn,
                                 controllers,
-                                max_size,
-                                allowed_commands,
-                                max_session_duration,
-                                max_op_duration,
+                                &config,
                             ),
                         );
                     });

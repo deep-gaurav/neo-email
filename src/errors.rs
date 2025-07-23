@@ -35,6 +35,7 @@ pub enum Error {
     /// 
     /// This error occurs when there is an unknown command.
     UnknownCommand(Commands),
+
     /// # Custom Error
     /// 
     /// This error occurs when there is a custom error.
