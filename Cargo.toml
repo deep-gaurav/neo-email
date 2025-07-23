@@ -2,7 +2,7 @@
 name = "neo-email"
 version = "0.1.1"
 edition = "2024"
-authors = ["Jean Vides <jean@nervio.us>"]
+authors = ["Jean Vides <devs@lojur.com>"]
 description = "The modern way to build emails services with Rust"
 repository = "https://github.com/JeanVydes/neo-email"
 readme = "README.md"
