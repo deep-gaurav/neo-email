@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use tokio::{sync::Mutex, time::timeout};
-use tokio_native_tls::TlsAcceptor;
+// use tokio_native_tls::TlsAcceptor;
 
 use crate::{
     client_message::ClientMessage,
     command::{handle_command, Commands},
-    connection::{upgrade_to_tls, SMTPConnection, SMTPConnectionStatus},
+    connection::{ SMTPConnection, SMTPConnectionStatus},
     mail::Mail,
     message::Message,
     server::{Config, Controllers},
@@ -17,7 +17,7 @@ use crate::{
 ///
 /// This function is responsible for handling the connection with the client, including the TLS handshake, and the SMTP commands, also dispatching the controllers configuring a timeout for session and operation.
 pub async fn handle_connection_with_timeout<B>(
-    tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
+    // tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
     config: &Config<B>,
@@ -35,7 +35,7 @@ pub async fn handle_connection_with_timeout<B>(
     match timeout(
         config.max_session_duration,
         handle_connection(
-            tls_acceptor,
+            // tls_acceptor,
             mutex_conn_for_handle_connection,
             controllers,
             config,
@@ -66,7 +66,7 @@ pub async fn handle_connection_with_timeout<B>(
 ///
 /// This function is responsible for handling the connection with the client, including the TLS handshake, and the SMTP commands, also dispatching the controllers.
 pub async fn handle_connection<B>(
-    tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
+    // tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
     config: &Config<B>,
@@ -80,6 +80,8 @@ pub async fn handle_connection<B>(
     // Send the initial message to the client
     let conn = mutex_con.lock().await;
     // Send the initial message to the client that lets the client know that the server is ready
+
+    log::trace!("Acquired connection");
     match conn
         .write_socket(
             &Message::builder()
@@ -104,7 +106,7 @@ pub async fn handle_connection<B>(
         match timeout(
             config.max_op_duration,
             handle_connection_logic(
-                tls_acceptor.clone(),
+                // tls_acceptor.clone(),
                 mutex_con.clone(),
                 controllers.clone(),
                 config,
@@ -169,7 +171,7 @@ pub enum HandleConnectionFlow {
 ///
 /// This function is responsible for handling the connection logic, including the TLS handshake, and the SMTP commands, also dispatching the controllers.
 pub async fn handle_connection_logic<B>(
-    tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
+    // tls_acceptor: Option<Arc<Mutex<TlsAcceptor>>>,
     mutex_con: Arc<Mutex<SMTPConnection<B>>>,
     controllers: Controllers<B>,
     config: &Config<B>,
@@ -397,7 +399,7 @@ where
         // Get the last index of alls messages (because last message is different)
         let last_index = response.len() - 1;
         // Get the tls_acceptor to upgrade the connection to TLS (if needed)
-        let tls_acceptor = tls_acceptor.clone();
+        // let tls_acceptor = tls_acceptor.clone();
 
         // Check if client want to start TLS and if the server supports it
         if conn.status == SMTPConnectionStatus::Closed {
@@ -408,60 +410,7 @@ where
             }
             conn.buffer.clear();
             return HandleConnectionFlow::Break;
-        } else if conn.status == SMTPConnectionStatus::StartTLS && config.use_tls && tls_acceptor.is_some()
-        {
-            // let know the client that we are ready to start TLS
-            match conn
-                .write_socket(
-                    &Message::builder()
-                        .status(StatusCodes::SMTPServiceReady)
-                        .message("Ready to start TLS".to_string())
-                        .build()
-                        .as_bytes(true),
-                )
-                .await
-            {
-                Ok(_) => (),
-                Err(err) => {
-                    log::error!("{}", err);
-                    return HandleConnectionFlow::Break;
-                }
-            }
-
-            log::trace!("[🌐🔒] Upgrading connection to TLS");
-            drop(conn);
-            match upgrade_to_tls(mutex_con.clone(), tls_acceptor).await {
-                Ok(_) => {
-                    log::trace!("[🌐🔒🟢] Connection upgraded to TLS");
-
-                    let mut conn = mutex_con.lock().await;
-                    conn.buffer.clear();
-                    conn.status = SMTPConnectionStatus::WaitingCommand;
-
-                    return HandleConnectionFlow::Continue;
-                }
-                Err(err) => {
-                    log::error!(
-                        "[🌐🔒🚫] An error ocurred while trying to upgrade to TLS {}",
-                        err
-                    );
-
-                    let mut conn = mutex_con.lock().await;
-                    conn.write_socket(
-                        &Message::builder()
-                            .status(StatusCodes::TransactionFailed)
-                            .message("TLS not available".to_string())
-                            .build()
-                            .as_bytes(true),
-                    )
-                    .await
-                    .unwrap();
-
-                    conn.buffer.clear();
-                    conn.status = SMTPConnectionStatus::WaitingCommand;
-                }
-            };
-        } else if conn.status == SMTPConnectionStatus::StartTLS && !config.use_tls {
+        }  else if conn.status == SMTPConnectionStatus::StartTLS && !config.use_tls {
             log::trace!("[🌐🔒🚫] TLS not available");
 
             let _ = conn

@@ -1,7 +1,6 @@
 use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use serde::{Deserialize, Serialize};
-use tokio::io::BufStream;
 use tokio::sync::Mutex;
 use trust_dns_resolver::TokioAsyncResolver;
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
@@ -76,7 +75,7 @@ where
     /// # threads_pool
     ///
     /// This field is responsible for holding the ThreadPool that will be used by the server.
-    threads_pool: Option<Arc<rayon::ThreadPool>>,
+    // threads_pool: Option<Arc<rayon::ThreadPool>>,
     /// # tls_acceptor
     ///
     /// This field is responsible for holding the TLS Acceptor that will be used by the server.
@@ -220,7 +219,7 @@ where
 
         SMTPServer {
             listener: None,
-            threads_pool: None,
+            // threads_pool: None,
             tls_acceptor: None,
             dns_resolver,
             config: Config {
@@ -430,19 +429,6 @@ where
             None => panic!("There isn't listener"),
         };
 
-        // Build the ThreadPool with the number of workers, 1 by default
-        log::info!(
-            "[🚧] Building ThreadPool with {} workers",
-            self.config.workers
-        );
-        self.threads_pool = match rayon::ThreadPoolBuilder::new()
-            .num_threads(self.config.workers)
-            .build()
-        {
-            Ok(pool) => Some(Arc::new(pool)),
-            Err(err) => panic!("{}", err),
-        };
-
         // Start the main loop for accepting connections
         log::info!("[🔧] Starting main loop for accepting connections");
         loop {
@@ -472,8 +458,7 @@ where
             );
 
             // Clone the thread pool, use_tls, tls_acceptor and controllers to be used in the tokio::spawn
-            let pool = self.threads_pool.clone();
-            let tls_acceptor = self.tls_acceptor.clone();
+            // let tls_acceptor = self.tls_acceptor.clone();
             let controllers = self.config.controllers.clone();
             let dns_resolver = self.dns_resolver.clone();
             let config = self.config.clone();
@@ -487,7 +472,7 @@ where
                     peer_addr,
                     use_tls: false,
                     tls_buff_socket: None,
-                    tcp_buff_socket: Some(Arc::new(Mutex::new(BufStream::new(socket)))),
+                    tcp_buff_socket: Some(Arc::new(Mutex::new( socket))),
                     buffer: Vec::new(),
                     mail_buffer: Vec::new(),
                     status: SMTPConnectionStatus::WaitingCommand,
@@ -496,18 +481,12 @@ where
                     tracing_commands: Vec::new(),
                 }));
 
-                if let Some(pool) = pool {
-                    pool.install(|| {
-                        tokio::runtime::Runtime::new().unwrap().block_on(
-                            handle_connection_with_timeout(
-                                tls_acceptor,
+                handle_connection_with_timeout(
+                                // tls_acceptor,
                                 conn,
                                 controllers,
                                 &config,
-                            ),
-                        );
-                    });
-                }
+                            ).await;
             });
         }
     }

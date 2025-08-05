@@ -51,7 +51,7 @@ pub struct SMTPConnection<T> {
     /// # TCP Buffer
     /// 
     /// This field represents the TCP Buffer.
-    pub tcp_buff_socket: Option<Arc<Mutex<BufStream<TcpStream>>>>,
+    pub tcp_buff_socket: Option<Arc<Mutex<TcpStream>>>,
     /// # Buffer
     /// 
     /// This field represents the Buffer, usually intended for commands.
@@ -98,9 +98,13 @@ impl<T> SMTPConnection<T> {
         } else {
             log::trace!("[✏️] Writing to TCP socket");
             if let Some(tcp_buff_socket) = &self.tcp_buff_socket {
+                log::trace!("[✏️] Locking TCP socket");
                 let mut tcp_buff_socket = tcp_buff_socket.lock().await;
+                log::trace!("[✏️] TCP socket locked, writing: {}",data.len());
                 tcp_buff_socket.write_all(data).await?;
                 tcp_buff_socket.flush().await?;
+            }else {
+                log::trace!("[🚫] No socket to write to");
             }
         }
         Ok(())
@@ -153,7 +157,7 @@ impl<T> SMTPConnection<T> {
         } else {
             if let Some(tcp_buff_socket) = &self.tcp_buff_socket {
                 let tcp_buff_socket = tcp_buff_socket.lock().await;
-                Ok(tcp_buff_socket.get_ref().peer_addr()?)
+                Ok(tcp_buff_socket.peer_addr()?)
             } else {
                 log::trace!("[🚫] No socket to read from");
                 Err(std::io::Error::new(
@@ -178,7 +182,7 @@ impl<T> SMTPConnection<T> {
     /// # Get TCP Buffer Socket
     /// 
     /// This function returns the TCP Buffer Socket.
-    pub async fn get_tcp_buffer(&self) -> Option<Arc<Mutex<BufStream<TcpStream>>>> {
+    pub async fn get_tcp_buffer(&self) -> Option<Arc<Mutex<TcpStream>>> {
         if !self.use_tls {
             self.tcp_buff_socket.clone()
         } else {
@@ -239,7 +243,7 @@ pub async fn upgrade_to_tls<B>(
         .ok_or("No TcpStream found")?;
     let tcp_buff_socket = Arc::try_unwrap(tcp_buff_socket).map_err(|_| "Failed to unwrap Arc")?;
     let tcp_buff_socket = tcp_buff_socket.into_inner();
-    let tcp_stream = tcp_buff_socket.into_inner();
+    let tcp_stream = tcp_buff_socket;
 
     // Acquire the TlsAcceptor and accept the TcpStream to create a TlsStream
     log::trace!("[🌐🔒] Locking TLS Acceptor");
